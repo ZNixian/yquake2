@@ -79,6 +79,9 @@ set(yquake2VulkanLinkerFlags)
 set(yquake2SDLLinkerFlags)
 set(yquake2ZLibLinkerFlags)
 
+# FIXME
+list(APPEND yquake2IncludeDirectories "${YQUAKE2LIBS}/include")
+
 # Set directory locations (allowing us to move directories easily)
 set(SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/src)
 set(BACKENDS_SRC_DIR ${SOURCE_DIR}/backends)
