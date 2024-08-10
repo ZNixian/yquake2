@@ -122,7 +122,6 @@ static cvar_t *gyro_calibration_x;
 static cvar_t *gyro_calibration_y;
 static cvar_t *gyro_calibration_z;
 static unsigned int num_samples;
-#define NATIVE_SDL_GYRO	// uses SDL_CONTROLLERSENSORUPDATE to read gyro
 
 // To ignore SDL_JOYDEVICEADDED at game init. Allows for hot plugging of game controller afterwards.
 static qboolean first_init = true;
@@ -710,7 +709,6 @@ IN_Update(void)
 				break;
 			}
 
-#ifdef NATIVE_SDL_GYRO	// controller sensors' reading supported (gyro, accelerometer)
 			case SDL_EVENT_GAMEPAD_SENSOR_UPDATE :
 				if (event.gsensor.sensor != SDL_SENSOR_GYRO)
 				{
@@ -725,54 +723,9 @@ IN_Update(void)
 					break;
 				}
 
-#else	// gyro read as "secondary joystick"
-			case SDL_EVENT_JOYSTICK_AXIS_MOTION :
-				if ( !imu_joystick || event.gdevice.which != SDL_GetJoystickInstanceID(imu_joystick) )
-				{
-					break;	// controller axes handled by SDL_CONTROLLERAXISMOTION
-				}
-
-				int axis_value = event.gaxis.value;
-				if (countdown_reason == REASON_GYROCALIBRATION && updates_countdown)
-				{
-					switch (event.gaxis.axis)
-					{
-						case IMU_JOY_AXIS_GYRO_PITCH:
-							gyro_accum[0] += axis_value;
-							num_samples[0]++;
-							break;
-						case IMU_JOY_AXIS_GYRO_YAW:
-							gyro_accum[1] += axis_value;
-							num_samples[1]++;
-							break;
-						case IMU_JOY_AXIS_GYRO_ROLL:
-							gyro_accum[2] += axis_value;
-							num_samples[2]++;
-					}
-					break;
-				}
-
-#endif	// NATIVE_SDL_GYRO
-
-#ifdef NATIVE_SDL_GYRO
 				gyro_x = event.gsensor.data[0] - gyro_calibration_x->value;
 				gyro_y = event.gsensor.data[1] - gyro_calibration_y->value;
 				gyro_z = event.gsensor.data[2] - gyro_calibration_z->value;
-#else	// old "joystick" gyro
-				float scaleFactor = (M_PI / 2560.0f); // normalized for Switch gyro
-				switch (event.gaxis.axis)	// inside "case SDL_JOYAXISMOTION" here
-				{
-					case IMU_JOY_AXIS_GYRO_PITCH:
-						gyro_x = -(axis_value - gyro_calibration_x->value) * scaleFactor;
-						break;
-					case IMU_JOY_AXIS_GYRO_YAW:
-						gyro_y = (axis_value - gyro_calibration_y->value) * scaleFactor;
-						break;
-					case IMU_JOY_AXIS_GYRO_ROLL:
-						gyro_z = (axis_value - gyro_calibration_z->value) * scaleFactor;
-						break;
-				}
-#endif	// NATIVE_SDL_GYRO
 				break;
 
 			case SDL_EVENT_GAMEPAD_REMOVED :
@@ -861,23 +814,11 @@ IN_Update(void)
 
 				case REASON_GYROCALIBRATION:	// finish and save calibration
 					{
-#ifdef NATIVE_SDL_GYRO
 						const float inverseSamples = 1.f / num_samples;
 						Cvar_SetValue("gyro_calibration_x", gyro_accum[0] * inverseSamples);
 						Cvar_SetValue("gyro_calibration_y", gyro_accum[1] * inverseSamples);
 						Cvar_SetValue("gyro_calibration_z", gyro_accum[2] * inverseSamples);
-#else
-						if (!num_samples[0] || !num_samples[1] || !num_samples[2])
-						{
-							Com_Printf("Calibration failed, please retry inside a level after having moved your controller a little.\n");
-						}
-						else
-						{
-							Cvar_SetValue("gyro_calibration_x", gyro_accum[0] / num_samples[0]);
-							Cvar_SetValue("gyro_calibration_y", gyro_accum[1] / num_samples[1]);
-							Cvar_SetValue("gyro_calibration_z", gyro_accum[2] / num_samples[2]);
-						}
-#endif
+
 						Com_Printf("Calibration results:\n X=%f Y=%f Z=%f\n",
 							gyro_calibration_x->value, gyro_calibration_y->value, gyro_calibration_z->value);
 						CalibrationFinishedCallback();
@@ -1456,11 +1397,7 @@ Controller_Rumble(const char *name, vec3_t source, qboolean from_player,
 void
 StartCalibration(void)
 {
-#ifdef NATIVE_SDL_GYRO
 	num_samples = 0;
-#else
-	num_samples[0] = num_samples[1] = num_samples[2] = 0;
-#endif
 	gyro_accum[0] = 0.0;
 	gyro_accum[1] = 0.0;
 	gyro_accum[2] = 0.0;
@@ -1587,24 +1524,7 @@ IN_Controller_Init(qboolean notify_user)
 		{
 			SDL_CloseJoystick(joystick);
 			joystick = NULL;
-#ifdef NATIVE_SDL_GYRO
 			Com_Printf ("Skipping IMU device.\n");
-#else	// if it's not a Left JoyCon, use it as Gyro
-			Com_Printf ("IMU device found.\n");
-			if ( !imu_joystick && name_len > 16 && strncmp(joystick_name + name_len - 16, "Left Joy-Con IMU", 16) != 0 )
-			{
-				imu_joystick = SDL_OpenJoystick(joysticks[i]);
-				if (imu_joystick)
-				{
-					show_gyro = true;
-					Com_Printf ("Using this device as Gyro sensor.\n");
-				}
-				else
-				{
-					Com_Printf ("Couldn't open IMU: %s.\n", SDL_GetError());
-				}
-			}
-#endif
 			continue;
 		}
 
@@ -1641,8 +1561,6 @@ IN_Controller_Init(qboolean notify_user)
 			Com_Printf("Enabled as Game Controller, settings:\n%s\n",
 				   SDL_GetGamepadMapping(controller));
 
-#ifdef NATIVE_SDL_GYRO
-
 			if (SDL_GamepadHasSensor(controller, SDL_SENSOR_GYRO)
 				&& !SDL_SetGamepadSensorEnabled(controller, SDL_SENSOR_GYRO, SDL_TRUE) )
 			{
@@ -1660,8 +1578,6 @@ IN_Controller_Init(qboolean notify_user)
 			{
 				SDL_SetGamepadLED(controller, 0, 80, 0);	// green light
 			}
-
-#endif	// NATIVE_SDL_GYRO
 
 			joystick_haptic = SDL_OpenHapticFromJoystick(SDL_GetGamepadJoystick(controller));
 
@@ -1690,9 +1606,7 @@ IN_Controller_Init(qboolean notify_user)
 				Com_Printf("Controller doesn't support rumble.\n");
 			}
 
-#ifdef NATIVE_SDL_GYRO	// "native" exits when finding a single working controller
 			break;
-#endif
 		}
 	}
 
@@ -1772,14 +1686,6 @@ IN_Controller_Shutdown(qboolean notify_user)
 	show_gamepad = show_gyro = show_haptic = false;
 	joystick_left_x = joystick_left_y = joystick_right_x = joystick_right_y = 0;
 	gyro_x = gyro_y = gyro_z = 0;
-
-#ifndef NATIVE_SDL_GYRO
-	if (imu_joystick)
-	{
-		SDL_CloseJoystick(imu_joystick);
-		imu_joystick = NULL;
-	}
-#endif
 }
 
 /*
