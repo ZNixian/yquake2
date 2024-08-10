@@ -44,6 +44,8 @@
 #include "../header/client.h"
 #include "input_common.h"
 
+#include "gyro_tracker.h"
+
 // ----
 
 // Maximal mouse move per frame
@@ -710,6 +712,12 @@ IN_Update(void)
 			}
 
 			case SDL_EVENT_GAMEPAD_SENSOR_UPDATE :
+				if (event.gsensor.sensor == SDL_SENSOR_ACCEL)
+				{
+					hmm_vec3 accel = *(hmm_vec3*)event.gsensor.data; // A little hacky
+					GyroTracker_PushAccelerometerEvent(event.gsensor.sensor_timestamp, accel);
+				}
+
 				if (event.gsensor.sensor != SDL_SENSOR_GYRO)
 				{
 					break;
@@ -726,6 +734,9 @@ IN_Update(void)
 				gyro_x = event.gsensor.data[0] - gyro_calibration_x->value;
 				gyro_y = event.gsensor.data[1] - gyro_calibration_y->value;
 				gyro_z = event.gsensor.data[2] - gyro_calibration_z->value;
+
+				hmm_vec3 velocity = {gyro_x, gyro_y, gyro_z};
+				GyroTracker_PushGyroEvent(event.gsensor.sensor_timestamp, velocity);
 				break;
 
 			case SDL_EVENT_GAMEPAD_REMOVED :
@@ -1571,6 +1582,17 @@ IN_Controller_Init(qboolean notify_user)
 			else
 			{
 				Com_Printf("Gyro sensor not found.\n");
+			}
+
+			if (SDL_GamepadHasSensor(controller, SDL_SENSOR_ACCEL)
+				&& !SDL_SetGamepadSensorEnabled(controller, SDL_SENSOR_ACCEL, SDL_TRUE) )
+			{
+				Com_Printf( "Accelerometer sensor enabled at %.2f Hz\n",
+							SDL_GetGamepadSensorDataRate(controller, SDL_SENSOR_ACCEL) );
+			}
+			else
+			{
+				Com_Printf("Accelerometer sensor not found.\n");
 			}
 
 			SDL_bool hasLED = SDL_GetBooleanProperty(SDL_GetGamepadProperties(controller), SDL_PROP_JOYSTICK_CAP_RGB_LED_BOOLEAN, SDL_FALSE);

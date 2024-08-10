@@ -9,7 +9,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # CMake project configuration.
-project(yquake2 C)
+project(yquake2 C CXX)
 
 # Cmake module search path.
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/stuff/cmake/modules ${CMAKE_MODULE_PATH})
@@ -489,6 +489,7 @@ if(SDL3_SUPPORT)
 	set(Client-SDL-Source
 		${CLIENT_SRC_DIR}/input/sdl3.c
 		${CLIENT_SRC_DIR}/vid/glimp_sdl3.c
+		${CLIENT_SRC_DIR}/input/gyro_tracker.cpp
 	)
 else()
 	set(Client-SDL-Source

@@ -6,6 +6,7 @@
 
 #include "header/input.h"
 #include "../header/client.h"
+#include "gyro_tracker.h"
 
 // ----
 
@@ -71,6 +72,9 @@ static unsigned short int flick_progress = FLICK_TIME;
 static float flick_samples[MAX_SMOOTH_SAMPLES];
 static unsigned short int front_sample = 0;
 
+// World-space aiming
+static float gyroaim_yaw_offset = 0;
+static float gyro_world_yaw = 0;
 
 /*
  * Joystick vector magnitude
@@ -328,6 +332,13 @@ IN_GyroActionDown(void)
 		case 2:
 			gyro_active = false;
 	}
+
+	GyroTracker_Recentre();
+
+	// Recentring the controller sets the yaw back to zero (and this can't easily be
+	// changed due to how the quaternion setup works), but we don't want that to affect the game.
+	// Hence we store the current yaw, and add it back on when we modify the camera position.
+	gyroaim_yaw_offset = gyro_world_yaw;
 }
 
 static void
@@ -593,6 +604,7 @@ void IN_Common_Move(usercmd_t *cmd, float mouse_x, float mouse_y, thumbstick_t l
 		gyro_in = IN_TightenInput(gyro_yaw, gyro_pitch);
 	}
 
+	/*
 	if (gyro_in.x)
 	{
 		cl.viewangles[YAW] += m_yaw->value * gyro_yawsensitivity->value
@@ -604,6 +616,29 @@ void IN_Common_Move(usercmd_t *cmd, float mouse_x, float mouse_y, thumbstick_t l
 		cl.viewangles[PITCH] -= m_pitch->value * gyro_pitchsensitivity->value
 								* cl_pitchspeed->value * gyro_in.y * gyroViewFactor;
 	}
+	*/
+
+	float last_yaw = gyro_world_yaw;
+	hmm_vec3 forwards = GyroTracker_GetForwards();
+	gyro_world_yaw = fmodf(atan2f(forwards.X, -forwards.Z) + gyroaim_yaw_offset, 360);
+	float gyro_world_pitch = asinf(forwards.Y);
+	float delta_yaw = gyro_world_yaw - last_yaw;
+
+	// Deal with the wrap-around at the 0/360 point.
+	if (delta_yaw > M_PI)
+	{
+		delta_yaw -= M_PI * 2;
+	}
+	else if (delta_yaw < -M_PI)
+	{
+		delta_yaw += M_PI * 2;
+	}
+
+	gyro_world_pitch *= gyro_pitchsensitivity->value;
+	delta_yaw *= gyro_yawsensitivity->value;
+
+	cl.viewangles[PITCH] = -gyro_world_pitch * (180 / M_PI);
+	cl.viewangles[YAW] -= delta_yaw * (180 / M_PI);
 
 	// Flick Stick: flick in progress, changing the yaw angle to the target progressively
 	if (flick_progress < FLICK_TIME)
