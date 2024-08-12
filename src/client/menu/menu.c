@@ -84,6 +84,8 @@ menulayer_t m_layers[MAX_MENU_DEPTH];
 menulayer_t m_active;		/* active menu layer */
 int m_menudepth;
 
+static cvar_t *joy_jp_ok_cancel_layout;
+
 static qboolean
 M_IsGame(const char *gamename)
 {
@@ -243,6 +245,19 @@ M_PushMenu(menuframework_s* menu)
 int
 Key_GetMenuKey(int key)
 {
+	// This swaps the OK/cancel buttons to match the Japanese layout, where
+	// the OK button is on the right and cancel is on the bottom.
+	if (joy_jp_ok_cancel_layout->value)
+	{
+		switch (key)
+		{
+		case K_BTN_B:
+		    return K_ENTER;
+		case K_BTN_A:
+		    return K_ESCAPE;
+		}
+	}
+
 	switch (key)
 	{
 		case K_KP_UPARROW:
@@ -2015,6 +2030,7 @@ M_Menu_Gyro_f(void)
  * JOY MENU
  */
 static menulist_s s_joy_invertpitch_box;
+static menulist_s s_joy_ok_button_box;
 static menuslider_s s_joy_yawsensitivity_slider;
 static menuslider_s s_joy_pitchsensitivity_slider;
 static menuslider_s s_joy_forwardsensitivity_slider;
@@ -2056,12 +2072,25 @@ InvertJoyPitchFunc(void *unused)
 }
 
 static void
+OkCancelButtonLayoutFunc(void *unused)
+{
+	Cvar_SetValue("joy_jp_ok_cancel_layout", (float)s_joy_ok_button_box.curvalue);
+}
+
+static void
 Joy_MenuInit(void)
 {
     static const char *yesno_names[] =
     {
         "no",
         "yes",
+        0
+    };
+
+    static const char *ok_button_layout_names[] =
+    {
+        "western",
+        "japanese",
         0
     };
 
@@ -2098,6 +2127,15 @@ Joy_MenuInit(void)
     s_joy_invertpitch_box.itemnames = yesno_names;
     s_joy_invertpitch_box.curvalue = (Cvar_VariableValue("joy_pitchsensitivity") < 0);
     Menu_AddItem(&s_joy_menu, (void *)&s_joy_invertpitch_box);
+
+    s_joy_ok_button_box.generic.type = MTYPE_SPINCONTROL;
+    s_joy_ok_button_box.generic.x = 0;
+    s_joy_ok_button_box.generic.y = (y += 20);
+    s_joy_ok_button_box.generic.name = "ok/cancel button layout";
+    s_joy_ok_button_box.generic.callback = OkCancelButtonLayoutFunc;
+    s_joy_ok_button_box.itemnames = ok_button_layout_names;
+    s_joy_ok_button_box.curvalue = joy_jp_ok_cancel_layout->value != 0 ? 1 : 0;
+    Menu_AddItem(&s_joy_menu, (void *)&s_joy_ok_button_box);
 
     s_joy_forwardsensitivity_slider.generic.type = MTYPE_SLIDER;
     s_joy_forwardsensitivity_slider.generic.x = 0;
@@ -6188,6 +6226,8 @@ M_Init(void)
     char cursorname[MAX_QPATH];
     int w = 0;
     int h = 0;
+
+    joy_jp_ok_cancel_layout = Cvar_Get("joy_jp_ok_cancel_layout", "0", CVAR_ARCHIVE);
 
     Cmd_AddCommand("playermodels", ListModels_f);
 
