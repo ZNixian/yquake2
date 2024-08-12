@@ -6,99 +6,114 @@
 
 #include "gyro_tracker.h"
 
-#include <stdint.h> // NOLINT(*-deprecated-headers)
-#include <array>
+#include <stdint.h>
 
-void GyroTracker::PushGyroEvent(uint64_t timestampNS, hmm_vec3 angularVelocity) {
+static const hmm_vec3 UNIT_X = {1, 0, 0};
+static const hmm_vec3 UNIT_Y = {0, 1, 0};
+static const hmm_vec3 UNIT_Z = {0, 0, 1};
+
+// Reference frames:
+//
+// ECEF frame (earth-centred, earth-fixed):
+//    The earth's reference frame.
+//    (technically this isn't an inertial frame since it neglects
+//    the earth's rotation, but that's completely negligible
+//    compared to the gyro's steady-state error).
+//
+// Initial frame:
+//    The reference frame in which the x,y,z axes matched SDL's definition
+//    of the controller's axes at the time when the controller sent us it's
+//    first sample.
+//    We assume the controller is horizontal (Y aligned with gravity) when
+//    it's first sample is received. Of course this isn't true, but it doesn't
+//    affect the output (which is the difference between the current and
+//    recentre frames) and it gives us a simple rule we can use with the
+//    accelerometer to correct for the gyroscope's DC bias.
+//    (Not to be confused with inertial frames, which this isn't)
+//
+// Current frame:
+//    The reference frame in which the x,y,z axes align with SDL's definition
+//    of them for the current controller position.
+//
+// Recentre frame:
+//    The reference frame in which the x,y,z axes align with SDL's definition
+//    of them for the controller position, when the gyroscope was last recentred
+//    by Lua (either through the user pressing a reset button, or automatically
+//    when performing or stopping some action).
+//
+// The end goal of this system is to find the difference between the recentre frame
+// and the current frame - this represents the rotation of the controller since it
+// was last recentred (see GetForwards).
+
+// The rotation that transforms an object from the current frame to the initial frame.
+static hmm_quaternion m_currentToInitial = {0, 0, 0, 1};
+
+// The rotation that transforms an object from the initial frame to the recentre frame.
+// This is stored inverted (vs being initial-to-recentred) since we'll use it every
+// time we read the forwards vector.
+static hmm_quaternion m_initialToRecentre = {0, 0, 0, 1};
+
+static hmm_vec3 m_lastAngVel = {0, 0, 0};
+static uint64_t m_lastGyroTimestamp = 0;
+
+static uint64_t m_lastAccelerometerTimestamp = 0;
+
+
+static hmm_vec3 GetMatrixColumn(hmm_mat4 matrix, int column) {
+	hmm_vec3 result = {
+			// I've double-checked and this column/row ordering is correct.
+			matrix.Elements[column][0],
+			matrix.Elements[column][1],
+			matrix.Elements[column][2],
+	};
+	return result;
+}
+
+void GyroTracker_PushGyroEvent(uint64_t timestampNS, hmm_vec3 angularVelocity) {
 	// If there's a big time gap, assume that something interrupted
 	// the data and we can't meaningfully integrate over that gap.
 	uint64_t deltaNS = timestampNS - m_lastGyroTimestamp;
 	m_lastGyroTimestamp = timestampNS;
-	if (deltaNS > 500'000'000) {
+	if (deltaNS > 500000000) {
 		m_lastAngVel = angularVelocity;
 		return;
 	}
 
 	// Assume the true angular velocity was linearly interpolated between
 	// the previous and current values.
-	float deltaS = (float) deltaNS / 1'000'000'000.f;
+	float deltaS = (float) deltaNS / 1.0e9f;
 
 	// This is what the integral of f=a(1-t/T)+b(t/T) works out to, where t
 	// is the time since the previous sample and T is the period between
 	// that sample (a) and the current sample (b).
-	hmm_vec3 averageAngVel = (m_lastAngVel + angularVelocity) / 2.f - m_gyroBias;
-	hmm_vec3 integratedEuler = averageAngVel * deltaS;
+	hmm_vec3 averageAngVel = HMM_DivideVec3f(HMM_AddVec3(m_lastAngVel, angularVelocity), 2.f);
+	hmm_vec3 integratedEuler = HMM_MultiplyVec3f(averageAngVel, deltaS);
 
 	// Convert the Euler rotation angles to a quaternion
 	// TODO is the rotation order here an accuracy problem?
-	hmm_quaternion thisUpdateRotation = HMM_QuaternionFromAxisAngle(hmm_vec3{1, 0, 0}, integratedEuler.X);
-	thisUpdateRotation = thisUpdateRotation * HMM_QuaternionFromAxisAngle(hmm_vec3{0, 1, 0}, integratedEuler.Y);
-	thisUpdateRotation = thisUpdateRotation * HMM_QuaternionFromAxisAngle(hmm_vec3{0, 0, 1}, integratedEuler.Z);
+	hmm_quaternion thisUpdateRotation = HMM_QuaternionFromAxisAngle(UNIT_X, integratedEuler.X);
+	thisUpdateRotation = HMM_MultiplyQuaternion(thisUpdateRotation,
+												HMM_QuaternionFromAxisAngle(UNIT_Y, integratedEuler.Y));
+	thisUpdateRotation = HMM_MultiplyQuaternion(thisUpdateRotation,
+												HMM_QuaternionFromAxisAngle(UNIT_Z, integratedEuler.Z));
 
-	m_currentToInitial = m_currentToInitial * thisUpdateRotation;
+	m_currentToInitial = HMM_MultiplyQuaternion(m_currentToInitial, thisUpdateRotation);
 
 	m_lastAngVel = angularVelocity;
-
-	// Disabled: quake already does this
-	/*
-	// Track the angular velocities, if they remain constant for awhile then assume the controller
-	// is stationary and use that to find the gyro's DC bias.
-	// We assume that two angular velocities are similar if they have a similar norm,
-	// so we don't detect if the direction is slowly changing. As long as we're strict
-	// enough with our tolerance though, this shouldn't be a problem.
-	m_biasDetectionBuffer[m_biasDetectionIndex++] = HMM_Length(angularVelocity);
-	m_biasDetectionRunningSum += angularVelocity;
-	if (m_biasDetectionIndex >= std::size(m_biasDetectionBuffer)) {
-		// By keeping a sum of all the values we've put into the buffer, we get
-		// an index we can use without having to scan the buffer a second time.
-		// This also lets us store the norms of the vectors in the buffer, rather than
-		// the vectors themselves.
-		hmm_vec3 average = m_biasDetectionRunningSum / (float) m_biasDetectionIndex;
-		float averageNorm = HMM_Length(average);
-
-		float tolerance = 0.01;
-		float minReq = averageNorm * (1 - tolerance);
-		float maxReq = averageNorm * (1 + tolerance);
-		int outsideToleranceCount = 0;
-
-		int blockCount = 10;
-		int blockSize = (int) std::size(m_biasDetectionBuffer) / blockCount;
-		for (int i = 0; i < 10; i++) {
-			float sum = 0;
-			for (int j = 0; j < blockSize; ++j) {
-				sum += m_biasDetectionBuffer[i * blockSize + j];
-			}
-
-			float norm = sum / (float) blockSize;
-			if (norm < minReq || norm > maxReq) {
-				outsideToleranceCount++;
-			}
-		}
-
-		// printf("%d\n", outsideToleranceCount);
-		if (outsideToleranceCount == 0) {
-			m_gyroBias = average;
-		}
-
-		m_biasDetectionIndex = 0;
-		m_biasDetectionRunningSum = {0, 0, 0};
-	}
-	*/
 }
 
-void GyroTracker::PushAccelerometerEvent(uint64_t timestampNS, hmm_vec3 acceleration) {
+void GyroTracker_PushAccelerometerEvent(uint64_t timestampNS, hmm_vec3 acceleration) {
 	// If there's a big time gap, assume that something interrupted
 	// the data and we can't meaningfully integrate over that gap.
 	uint64_t deltaNS = timestampNS - m_lastAccelerometerTimestamp;
 	m_lastAccelerometerTimestamp = timestampNS;
-	if (deltaNS > 500'000'000) {
-		m_lastAccel = acceleration;
+	if (deltaNS > 500000000) {
 		return;
 	}
 
-	float deltaS = (float) deltaNS / 1'000'000'000.f;
+	float deltaS = (float) deltaNS / 1.0e9f;
 
-	float accelerationMagnitude = HMM_Length(acceleration);
+	float accelerationMagnitude = HMM_LengthVec3(acceleration);
 	if (accelerationMagnitude == 0) {
 		return; // Block divide-by-zeros
 	}
@@ -106,35 +121,37 @@ void GyroTracker::PushAccelerometerEvent(uint64_t timestampNS, hmm_vec3 accelera
 	// Find the normalised vector representing where the acceleration is, which we assume
 	// is where gravity is - accelerations from the player shaking the controller should
 	// approximately cancel out.
-	// TODO find a filtered controller-relative gravity vector, and use that for rotation.
-	hmm_vec3 gravity = acceleration / accelerationMagnitude;
+	// TODO filtering to stop high-frequency noise messing with this.
+	hmm_vec3 gravity = HMM_DivideVec3f(acceleration, accelerationMagnitude);
 
 	// Find out where we gravity *should* be, from our definition of the initial reference
 	// frame being horizontally aligned.
 	// We use the inverse to convert from the initial frame to the current frame.
+	// Note that column 1 of the matrix represents the +ve Y axis.
 	hmm_quaternion initialToCurrent = HMM_InverseQuaternion(m_currentToInitial);
-	hmm_vec3 down = (HMM_QuaternionToMat4(initialToCurrent) * hmm_vec4{0, -1, 0, 0}).XYZ;
+	hmm_vec3 down = HMM_MultiplyVec3f(GetMatrixColumn(HMM_QuaternionToMat4(initialToCurrent), 1), -1);
 
 	// Find the angle-axis difference between these two vectors.
 	hmm_vec3 cross = HMM_Cross(down, gravity);
-	float length = HMM_Length(cross);
+	float length = HMM_LengthVec3(cross);
 	if (length == 0) {
 		return; // No drift at all! Block the divide-by-zero.
 	}
 	float angle = asinf(length);
-	hmm_vec3 axis = cross / length;
+	hmm_vec3 axis = HMM_DivideVec3f(cross, length);
 
 	// Figure out how much to rotate the state by to correct for the gyro drift
 	// This effectively forms an IIR filter.
 	float angleToCorrect = angle * deltaS;
 	hmm_quaternion correction = HMM_QuaternionFromAxisAngle(axis, angleToCorrect);
-	m_currentToInitial = m_currentToInitial * correction;
+	m_currentToInitial = HMM_MultiplyQuaternion(m_currentToInitial, correction);
 }
 
-void GyroTracker::Recentre() {
+void GyroTracker_Recentre() {
 	// Find the player's yaw, relative to the initial frame
 	// +ve is CCW when viewed from above
-	hmm_vec3 forwards = (HMM_QuaternionToMat4(m_currentToInitial) * hmm_vec4{0, 0, -1, 0}).XYZ;
+	// Note column 2 represents +ve Z, which points towards the player.
+	hmm_vec3 forwards = HMM_MultiplyVec3f(GetMatrixColumn(HMM_QuaternionToMat4(m_currentToInitial), 2), -1);
 	float yaw = atan2f(-forwards.X, -forwards.Z);
 
 	// Find the player's pitch, where +ve is above the horizon and -ve is below
@@ -146,14 +163,14 @@ void GyroTracker::Recentre() {
 	// include the yaw then weird things happen, which is most noticeable with recentring
 	// not putting the camera back to the horizon.
 	hmm_quaternion recentreToInitial;
-	recentreToInitial =
-			HMM_QuaternionFromAxisAngle(hmm_vec3{0, 1, 0}, yaw) * HMM_QuaternionFromAxisAngle(hmm_vec3{1, 0, 0}, pitch);
+	recentreToInitial = HMM_MultiplyQuaternion(HMM_QuaternionFromAxisAngle(UNIT_Y, yaw),
+											   HMM_QuaternionFromAxisAngle(UNIT_X, pitch));
 
 	// Create the inverse transform
 	m_initialToRecentre = HMM_InverseQuaternion(recentreToInitial);
 }
 
-hmm_vec3 GyroTracker::GetForwards() {
+hmm_vec3 GyroTracker_GetForwards() {
 	// This takes the forwards vector relative to the controller (negative Z
 	// faces away from the player when it's held flat), transforms it to the
 	// initial coordinate system, then transforms it to the recentre system.
@@ -196,25 +213,6 @@ hmm_vec3 GyroTracker::GetForwards() {
 	// We then turn multiply by {0,0,-1} which is the axis coming out the USB port, transforming
 	// this vector to apply all the rotations made since the last recentre operation.
 
-	return (HMM_QuaternionToMat4(m_initialToRecentre * m_currentToInitial) * hmm_vec4{0, 0, -1, 0}).XYZ;
-}
-
-// C wrappers
-
-static GyroTracker impl;
-
-void GyroTracker_PushGyroEvent(uint64_t timestampNS, hmm_vec3 angularVelocity) {
-	impl.PushGyroEvent(timestampNS, angularVelocity);
-}
-
-void GyroTracker_PushAccelerometerEvent(uint64_t timestampNS, hmm_vec3 acceleration) {
-	impl.PushAccelerometerEvent(timestampNS, acceleration);
-}
-
-void GyroTracker_Recentre() {
-	impl.Recentre();
-}
-
-hmm_vec3 GyroTracker_GetForwards() {
-	return impl.GetForwards();
+	hmm_quaternion currentToRecentre = HMM_MultiplyQuaternion(m_initialToRecentre, m_currentToInitial);
+	return HMM_MultiplyVec3f(GetMatrixColumn(HMM_QuaternionToMat4(currentToRecentre), 2), -1);
 }

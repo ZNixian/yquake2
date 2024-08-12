@@ -922,6 +922,7 @@ CLIENT_OBJS_ := \
 ifeq ($(WITH_SDL3),yes)
 CLIENT_OBJS_ += \
 	src/client/input/sdl3.o \
+	src/client/input/gyro_tracker.o \
 	src/client/vid/glimp_sdl3.o
 else
 CLIENT_OBJS_ += \
