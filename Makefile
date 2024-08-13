@@ -884,6 +884,7 @@ CLIENT_OBJS_ := \
 	src/client/sound/sound.o \
 	src/client/sound/wave.o \
 	src/client/vid/vid.o \
+	src/client/input/input_common.o \
 	src/common/argproc.o \
 	src/common/clientserver.o \
 	src/common/collision.o \
