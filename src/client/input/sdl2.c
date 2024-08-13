@@ -40,6 +40,7 @@
 #include "../header/keyboard.h"
 #include "../header/client.h"
 #include "input_common.h"
+#include "gyro_tracker.h"
 
 // ----
 
@@ -712,6 +713,12 @@ IN_Update(void)
 
 #ifdef NATIVE_SDL_GYRO	// controller sensors' reading supported (gyro, accelerometer)
 			case SDL_CONTROLLERSENSORUPDATE:
+				if (event.csensor.sensor == SDL_SENSOR_ACCEL)
+				{
+					hmm_vec3 accel = *(hmm_vec3*)event.csensor.data; // A little hacky
+					GyroTracker_PushAccelerometerEvent(event.csensor.timestamp_us * 1000, accel);
+				}
+
 				if (event.csensor.sensor != SDL_SENSOR_GYRO)
 				{
 					break;
@@ -758,6 +765,9 @@ IN_Update(void)
 				gyro_x = event.csensor.data[0] - gyro_calibration_x->value;
 				gyro_y = event.csensor.data[1] - gyro_calibration_y->value;
 				gyro_z = event.csensor.data[2] - gyro_calibration_z->value;
+
+				hmm_vec3 velocity = {gyro_x, gyro_y, gyro_z};
+				GyroTracker_PushGyroEvent(event.csensor.timestamp_us * 1000, velocity);
 #else	// old "joystick" gyro
 				float scaleFactor = (M_PI / 2560.0f); // normalized for Switch gyro
 				switch (event.caxis.axis)	// inside "case SDL_JOYAXISMOTION" here
@@ -1651,6 +1661,19 @@ IN_Controller_Init(qboolean notify_user)
 			{
 				Com_Printf("Gyro sensor not found.\n");
 			}
+
+#if SDL_VERSION_ATLEAST(2, 0, 16)
+			if (SDL_GameControllerHasSensor(controller, SDL_SENSOR_ACCEL)
+				&& !SDL_GameControllerSetSensorEnabled(controller, SDL_SENSOR_ACCEL, SDL_TRUE) )
+			{
+				Com_Printf( "Accelerometer sensor enabled at %.2f Hz\n",
+							SDL_GameControllerGetSensorDataRate(controller, SDL_SENSOR_ACCEL) );
+			}
+			else
+			{
+				Com_Printf("Accelerometer sensor not found.\n");
+			}
+#endif
 
 			if ( SDL_GameControllerHasLED(controller) )
 			{

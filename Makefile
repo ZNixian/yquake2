@@ -885,6 +885,7 @@ CLIENT_OBJS_ := \
 	src/client/sound/wave.o \
 	src/client/vid/vid.o \
 	src/client/input/input_common.o \
+	src/client/input/gyro_tracker.o \
 	src/common/argproc.o \
 	src/common/clientserver.o \
 	src/common/collision.o \
@@ -922,7 +923,6 @@ CLIENT_OBJS_ := \
 ifeq ($(WITH_SDL3),yes)
 CLIENT_OBJS_ += \
 	src/client/input/sdl3.o \
-	src/client/input/gyro_tracker.o \
 	src/client/vid/glimp_sdl3.o
 else
 CLIENT_OBJS_ += \

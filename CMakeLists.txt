@@ -450,6 +450,7 @@ set(Client-Source
 	${CLIENT_SRC_DIR}/sound/wave.c
 	${CLIENT_SRC_DIR}/vid/vid.c
 	${CLIENT_SRC_DIR}/input/input_common.c
+	${CLIENT_SRC_DIR}/input/gyro_tracker.c
 	${COMMON_SRC_DIR}/argproc.c
 	${COMMON_SRC_DIR}/clientserver.c
 	${COMMON_SRC_DIR}/collision.c
@@ -489,7 +490,6 @@ if(SDL3_SUPPORT)
 	set(Client-SDL-Source
 		${CLIENT_SRC_DIR}/input/sdl3.c
 		${CLIENT_SRC_DIR}/vid/glimp_sdl3.c
-		${CLIENT_SRC_DIR}/input/gyro_tracker.c
 	)
 else()
 	set(Client-SDL-Source
